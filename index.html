@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <title>BLE Web App: Monitoreo</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" type="image/png" href="favicon.ico">
+        <link rel="stylesheet" type="text/css" href="style.css">
+        <meta charset="UTF-8">
+    </head>
+    <body>
+        <div class="topnav">
+            <h1>Monitoreo y Control de Riego</h1>
+            <h2>Web Bluetooth API</h2>
+        </div>
+        <div class="content">
+            <div class="card-grid">
+                <div class="card">
+                    <p>
+                        <button id="connectBleButton" class="connectButton">Conectar Dispositivo</button>
+                        <button id="disconnectBleButton" class="disconnectButton">Desconectar Dispositivo</button>
+                        <button id="syncTimeButton" class="updateButton">SINCRONIZAR HORA</button>
+                    </p>
+                    <p class="gray-label">Estatus BLE: <strong><span id="bleState" style="color:#D13A30;">Sin conexión</span></strong></p>
+                    <p class="gray-label">Última actualización de datos: <span id="timestamp">Sin información</span></p>
+                </div>
+            </div>
+            <div class="card-grid">
+                <div class="card">
+                    <h3>Temperatura</h3>
+                    <p class="reading"><span id="tempContainer">Sin Registros</span></p>
+                </div>
+                <div class="card">
+                    <h3>Humedad</h3>
+                    <p class="reading"><span id="humContainer">Sin Registros</span></p>
+                </div>
+            </div>
+            <div class="card-grid">
+                <div class="card">
+                    <h3>Cambiar Hora de Riego Preferida</h3>
+                    <p class="gray-label">Hora Actual: <span id="programmedTimeContainer">Sin Registros</span></p>
+                    <form>
+                        <label for="newIrrigationTime">Nueva Hora: </label>
+                        <input type="time" id="newIrrigationTime" name="newIrrigationTime" value="08:30" style="width: 70px; text-align: center;">
+                    </form>
+                    <button id="updateIrrTimeButton" class="updateButton">ACTUALIZAR</button>
+                </div>
+                <div class="card">
+                    <h3>Cambiar Humedad Objetivo</h3>
+                    <p class="gray-label">Objetivo de Humedad Actual: <span id="humSetpointContainer">Sin Registros</span></p>
+                    <form>
+                        <label for="newHumidity">Nuevo Objetivo: </label>
+                        <input type="number" id="newHumidity" name="newHumidity" value="75" min="0" max="100" step="1" style="width: 70px; text-align: center;">
+                        <label>%</label>
+                    </form>
+                    <button id="updateHumButton" class="updateButton">ACTUALIZAR</button>
+                </div>
+            </div>
+            <div class="card-grid">
+                <div class="card">
+                    <h3>Último Riego Registrado</h3>
+                    <p class="reading"><span id="timeLogContainer">Sin Registros</span></p>
+                </div>
+            </div>
+        </div>
+    </body>
+    <script>
+        // DOM Elements
+        const connectButton = document.getElementById('connectBleButton');
+        const disconnectButton = document.getElementById('disconnectBleButton');
+        const syncTimeButton = document.getElementById('syncTimeButton');
+        const updateIrrTimeButton = document.getElementById('updateIrrTimeButton');
+        const updateHumButton = document.getElementById('updateHumButton');
+        const tempValue = document.getElementById('tempContainer');
+        const humValue = document.getElementById('humContainer');
+        const humSetpointValue = document.getElementById('humSetpointContainer');
+        const programmedTimeValue = document.getElementById('programmedTimeContainer');
+        const timeLogValue = document.getElementById('timeLogContainer');
+        const bleStateContainer = document.getElementById('bleState');
+        const timestampContainer = document.getElementById('timestamp');
+        const newIrrigationTimeInput = document.getElementById('newIrrigationTime');
+        const newHumSetpointInput = document.getElementById('newHumidity');
+
+        //Define BLE Device Specs
+        var deviceName ='Monitor Riego BLE';
+
+        var bleEnvironmentService = '19b10000-e8f2-537e-4f6c-d104768a1214';
+        var bleTimeService = '80e10000-e39a-4aed-9119-41e49e15754f';
+
+        var tempCharacteristic = '19b10001-e8f2-537e-4f6c-d104768a1214';
+        var humCharacteristic = '19b10002-e8f2-537e-4f6c-d104768a1214';
+        var humSetpointCharacteristic = '19b10003-e8f2-537e-4f6c-d104768a1214';
+
+        var dateTimeCharacteristic = '80e10001-e39a-4aed-9119-41e49e15754f';
+        var irrigationTimeCharacteristic = '80e10002-e39a-4aed-9119-41e49e15754f';
+        var timeLogCharacteristic = '80e10003-e39a-4aed-9119-41e49e15754f';
+
+        //Global Variables to Handle Bluetooth
+        var bleServer;
+        var bleEnvironmentServiceFound;
+        var bleTimeServiceFound;
+
+        var tempCharacteristicFound;
+        var humCharacteristicFound;
+        var humSetpointCharacteristicFound;
+
+        var dateTimeCharacteristicFound;
+        var irrigationTimeCharacteristicFound;
+        var timeLogCharacteristicFound;
+
+        // Connect Button (search for BLE Devices only if BLE is available)
+        connectButton.addEventListener('click', (event) => {
+            if (isWebBluetoothEnabled()){
+                connectToDevice();
+            }
+        });
+
+        // Disconnect Button
+        disconnectButton.addEventListener('click', disconnectDevice);
+
+        // Write new values on critical system variables
+        updateIrrTimeButton.addEventListener('click', () => updateIrrigationTime());
+        updateHumButton.addEventListener('click', () => updateHumiditySetpoint());
+        syncTimeButton.addEventListener('click', () => syncDeviceTime());
+
+        // Check if BLE is available in your Browser
+        function isWebBluetoothEnabled() {
+            if (!navigator.bluetooth) {
+                window.alert('Su navegador no es compatible con BLE Web.\nPruebe la aplicación en un navegador distinto (Chrome recomendado).');
+                console.log('La API de Web Bluetooth no se encuentra disponible en este navegador.');
+                bleStateContainer.innerHTML = "La API de Web Bluetooth no se encuentra disponible en este navegador/dispositivo.";
+                return false
+            }
+            console.log('Su navegador es compatible con la API de Web Bluetooth.');
+            return true
+        }
+
+        // Connect to BLE Device and Enable Notifications
+        function connectToDevice(){
+            console.log('Inicializando Bluetooth...');
+            navigator.bluetooth.requestDevice({
+                filters: [{name: deviceName}],
+                optionalServices: [bleEnvironmentService, bleTimeService]
+            })
+            .then(device => {
+                console.log('Dispositivo elegido: ', device.name);
+                bleStateContainer.innerHTML = 'Se ha conectado al dispositivo ' + device.name;
+                bleStateContainer.style.color = "#24AF37";
+                device.addEventListener('gattservicedisconnected', onDisconnected);
+                return device.gatt.connect();
+            })
+            .then(gattServer =>{
+                bleServer = gattServer;
+                console.log("Conectado al servidor GATT");
+
+                bleServer.getPrimaryService(bleEnvironmentService)
+                .then(service => {
+                    bleEnvironmentServiceFound = service;
+                    console.log("Servicio descubierto: ", service.uuid);
+                    return Promise.all([
+                    service.getCharacteristic(tempCharacteristic),
+                    service.getCharacteristic(humCharacteristic),
+                    service.getCharacteristic(humSetpointCharacteristic),
+                    ]);
+                })
+                .then(characteristics => {
+                    tempCharacteristicFound = characteristics[0];
+                    humCharacteristicFound = characteristics[1];
+                    humSetpointCharacteristicFound = characteristics[2];
+
+                    tempCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+                    humCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+                    humSetpointCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+
+                    tempCharacteristicFound.startNotifications();
+                    humCharacteristicFound.startNotifications();
+                    humSetpointCharacteristicFound.startNotifications();
+                })
+                .then(() => {
+                    console.log("Servicio ambiental iniciado correctamente.");
+                })
+                .catch(error => {
+                    console.log('Error: ', error);
+                })
+
+                bleServer.getPrimaryService(bleTimeService)
+                .then(service => {
+                    bleTimeServiceFound = service;
+                    console.log("Servicio descubierto: ", service.uuid);
+                    return Promise.all([
+                    service.getCharacteristic(dateTimeCharacteristic),
+                    service.getCharacteristic(irrigationTimeCharacteristic),
+                    service.getCharacteristic(timeLogCharacteristic),
+                    ]);
+                })
+                .then(characteristics => {
+                    dateTimeCharacteristicFound = characteristics[0];
+                    irrigationTimeCharacteristicFound = characteristics[1];
+                    timeLogCharacteristicFound = characteristics[2];
+
+                    dateTimeCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+                    irrigationTimeCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+                    timeLogCharacteristicFound.addEventListener('characteristicvaluechanged', handleCharacteristicChanges);
+
+                    dateTimeCharacteristicFound.startNotifications();
+                    irrigationTimeCharacteristicFound.startNotifications();
+                    timeLogCharacteristicFound.startNotifications();
+                })
+                .then(() => {
+                    console.log("Servicio de tiempo iniciado correctamente.");
+                })
+                .catch(error => {
+                    console.log('Error: ', error);
+                })
+            })
+        }
+
+        function onDisconnected(event){
+            console.log('Dispositivo desconectado: ', event.target.device.name);
+            bleStateContainer.innerHTML = "Dispositivo desconectado";
+            bleStateContainer.style.color = "#D13A30";
+
+            connectToDevice();
+        }
+
+        function handleCharacteristicChanges(event){
+            const characteristic = event.target;
+            const newValueReceived = new TextDecoder().decode(event.target.value);
+
+            // console.log(newValueReceived);
+
+            if(characteristic.uuid == tempCharacteristic){
+                console.log("Valor de la característica de temperatura cambiado: ", newValueReceived);
+                tempValue.innerHTML = newValueReceived + " °C";
+            }
+            else if(characteristic.uuid == humCharacteristic){
+                console.log("Valor de la característica de humedad cambiado: ", newValueReceived);
+                humValue.innerHTML = newValueReceived + "%";
+            }
+            else if(characteristic.uuid == humSetpointCharacteristic){
+                console.log("Valor de la característica de humedad objetivo cambiado: ", newValueReceived);
+                humSetpointValue.innerHTML = newValueReceived;
+            }
+            else if(characteristic.uuid == irrigationTimeCharacteristic){
+                console.log("Valor de la característica de hora de riego cambiado: ", newValueReceived);
+                programmedTimeValue.innerHTML = newValueReceived;
+            }
+            else if(characteristic.uuid == timeLogCharacteristic){
+                console.log("Valor de la característica de tiempos registrados de riego cambiado: ", newValueReceived);
+                timeLogValue.innerHTML = newValueReceived;
+            }
+            
+            timestampContainer.innerHTML = getDateTime();
+        }
+
+        function updateIrrigationTime() {
+            if (bleServer && bleServer.connected) {
+                syncDeviceTime();
+                const newTime = newIrrigationTimeInput.value;
+
+                const hours = parseInt(newTime.substring(0, 2));
+                const minutes = parseInt(newTime.substring(3, 5));
+
+                const data = new Uint8Array([hours, minutes]);
+                
+                bleTimeServiceFound.getCharacteristic(irrigationTimeCharacteristic)
+                .then(characteristic => {
+                    console.log("Se ha encontrado la característica de tiempo de riego: ", characteristic.uuid);
+                    return characteristic.writeValue(data);
+                })
+                .then(() => {
+                    console.log("Valor escrito en la característica de tiempo de riego: ", newTime);
+                    programmedTimeValue.innerHTML = newTime;
+                })
+                .catch(error => {
+                    console.error("Error de escritura sobre característica de tiempo de riego: ", error);
+                });
+            } else {
+                console.error ("Bluetooth desconectado. No se puede ejecutar la escritura.")
+                window.alert("Bluetooth desconectado. No se pueden alterar los parámetros de control. \n¡Conecte un dispositivo BLE primero!")
+            }
+        }
+
+        function updateHumiditySetpoint() {
+            if (bleServer && bleServer.connected) {
+                syncDeviceTime();
+                const newHumSetpoint = newHumSetpointInput.value;
+
+                const data = new TextEncoder().encode(String(newHumSetpoint));
+                
+                bleEnvironmentServiceFound.getCharacteristic(humSetpointCharacteristic)
+                .then(characteristic => {
+                    console.log("Se ha encontrado la característica de humedad objetivo: ", characteristic.uuid);
+                    return characteristic.writeValue(data);
+                })
+                .then(() => {
+                    console.log("Valor escrito en la característica de humedad objetivo: ", newHumSetpoint);
+                    humSetpointValue.innerHTML = newHumSetpoint;
+                })
+                .catch(error => {
+                    console.error("Error de escritura sobre característica de humedad objetivo: ", error);
+                });
+            } else {
+                console.error ("Bluetooth desconectado. No se puede ejecutar la escritura.")
+                window.alert("Bluetooth desconectado. No se pueden alterar los parámetros de control. \n¡Conecte un dispositivo BLE primero!")
+            }            
+        }
+
+        function syncDeviceTime() {
+            if (bleServer && bleServer.connected) {
+                const syncTimeString = getSyncDateTime();
+
+                let syncTimeArray = new TextEncoder().encode(syncTimeString);
+                
+                bleTimeServiceFound.getCharacteristic(dateTimeCharacteristic)
+                .then(characteristic => {
+                    console.log("Se ha encontrado la característica de fecha y hora: ", characteristic.uuid);
+                    return characteristic.writeValue(syncTimeArray);
+                })
+                .then(() => {
+                    console.log("Valor escrito en la característica de fecha y hora: ", syncTimeString);
+                })
+                .catch(error => {
+                    console.error("Error de escritura sobre característica de fecha y hora: ", error);
+                });
+            } else {
+                console.error ("Bluetooth desconectado. No se puede ejecutar la escritura.")
+                window.alert("Bluetooth desconectado. No hay dispositivos por sincronizar. \n¡Conecte un dispositivo BLE primero!")
+            }
+        }
+
+        function disconnectDevice() {
+            console.log("Desconectando dispositivo...");
+            if (bleServer && bleServer.connected) {
+                if (tempCharacteristicFound) {
+                    tempCharacteristicFound.stopNotifications()
+                        .then(() => {
+                            humCharacteristicFound.stopNotifications();
+                            humSetpointCharacteristicFound.stopNotifications();
+                            dateTimeCharacteristicFound.stopNotifications();
+                            irrigationTimeCharacteristicFound.stopNotifications();
+                            timeLogCharacteristicFound.stopNotifications();
+                            console.log("Se han parado las notificaciones.");
+                            return bleServer.disconnect();
+                        })
+                        .then(() => {
+                            console.log("Device Disconnected");
+                            bleStateContainer.innerHTML = "Device Disconnected";
+                            bleStateContainer.style.color = "#D13A30";
+                        })
+                        .catch(error => {
+                            console.log("Ha ocurrido un error:", error);
+                        });
+                } else {
+                    console.log("No hay características por desconectar.");
+                }
+            } else {
+                // Throw an error if Bluetooth is not connected
+                console.error("Bluetooth is not connected.");
+                window.alert("No hay dispositivos por desconectar.")
+            }
+        }
+
+        function getDateTime() {
+            var currentdate = new Date();
+            var day = ("00" + currentdate.getDate()).slice(-2); // Convert day to string and slice
+            var month = ("00" + (currentdate.getMonth() + 1)).slice(-2);
+            var year = currentdate.getFullYear();
+            var hours = ("00" + currentdate.getHours()).slice(-2);
+            var minutes = ("00" + currentdate.getMinutes()).slice(-2);
+            var seconds = ("00" + currentdate.getSeconds()).slice(-2);
+
+            var datetime = day + "/" + month + "/" + year + " a las " + hours + ":" + minutes + ":" + seconds;
+            return datetime;
+        }
+
+        function getSyncDateTime() {
+            var currentdate = new Date();
+            var day = ("00" + currentdate.getDate()).slice(-2); // Convert day to string and slice
+            var month = ("00" + (currentdate.getMonth() + 1)).slice(-2);
+            var year = currentdate.getFullYear();
+            var hours = ("00" + currentdate.getHours()).slice(-2);
+            var minutes = ("00" + currentdate.getMinutes()).slice(-2);
+            var seconds = ("00" + currentdate.getSeconds()).slice(-2);
+
+            var datetime = day + "/" + month + "/" + year + "-" + hours + ":" + minutes + ":" + seconds;
+            return datetime;
+        }
+    </script>
+</html>
